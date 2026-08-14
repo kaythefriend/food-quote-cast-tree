@@ -4,18 +4,21 @@ type Cast={hash:string;parent?:string|null;username:string;displayName?:string;a
 const ROOT='0x3db990553cbe9e8e8993504624b5c2aaf483aa73'
 const BASE='https://api.neynar.com/v2/farcaster'
 
-// Use only media explicitly attached to this cast. Nested/related embed media
-// is deliberately ignored so one cast cannot inherit another cast's food photo.
+// Prefer the exact media fields returned by Neynar for this cast. The root
+// occasionally exposes its attachment through the cast's direct embed/media
+// payload rather than the normalized image_url field.
 function imageOf(c:any){
   const add=(v:any)=>typeof v==='string'&&/^https?:\/\//.test(v)&&!v.includes('farcaster.xyz')?v:undefined
   const embeds=Array.isArray(c?.embeds)?c.embeds:[]
   for(const e of embeds){
-    const direct=[e?.url,e?.image_url,e?.image,e?.metadata?.image,e?.metadata?.image_url]
+    const direct=[e?.url,e?.image_url,e?.image,e?.metadata?.image,e?.metadata?.image_url,e?.metadata?.ogImage]
     for(const u of direct){const x=add(u);if(x)return x}
   }
+  const directMedia=[c?.image_url,c?.image,c?.media?.image_url,c?.media?.url,c?.metadata?.image,c?.metadata?.image_url]
+  for(const u of directMedia){const x=add(u);if(x)return x}
   const frames=Array.isArray(c?.frames)?c.frames:[]
   for(const f of frames){const x=add(f?.image_url)||add(f?.image);if(x)return x}
-  return add(c?.image_url)||add(c?.image)
+  return undefined
 }
 function normalize(c:any,parentOverride?:string):Cast{const username=c?.author?.username||c?.author?.display_name||'unknown';return {hash:c.hash,parent:parentOverride??c.parent_hash??c.parent?.hash??null,username,displayName:c?.author?.display_name,avatar:c?.author?.pfp_url,image:imageOf(c),text:c?.text,timestamp:c?.timestamp,castUrl:`https://farcaster.xyz/${username}/${c.hash}`}}
 async function api(path:string){const key=process.env.NEYNAR_API_KEY;if(!key)throw Error('NEYNAR_API_KEY is not configured in Vercel.');const r=await fetch(BASE+path,{headers:{accept:'application/json','x-api-key':key},next:{revalidate:60}});if(!r.ok)throw Error(`Farcaster API returned ${r.status}`);return r.json()}
