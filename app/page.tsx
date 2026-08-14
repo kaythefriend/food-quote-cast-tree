@@ -21,9 +21,9 @@ function Canvas({casts,onSelect}:{casts:Cast[];onSelect:(c:Cast)=>void}){
  const root=casts[0]
  const children=useMemo(()=>{const m=new Map<string,Cast[]>();for(const c of casts){if(c.parent){const a=m.get(c.parent)||[];a.push(c);m.set(c.parent,a)}}return m},[casts])
 
- // Compact, downward-growing layout. Each level is kept inside a centered
- // band and wraps into a few rows when there are many quote-casts. This avoids
- // the extreme left/right spread while preserving every parent-child edge.
+ // Balanced downward-growing layout: slightly wider than the previous compact
+ // version, while keeping the whole conversation visually centered. Seven
+ // columns reduces excessive vertical stacking without creating a wide sprawl.
  const positions=useMemo(()=>{
    const out=new Map<string,Pos>()
    if(!root)return out
@@ -33,16 +33,18 @@ function Canvas({casts,onSelect}:{casts:Cast[];onSelect:(c:Cast)=>void}){
    while(queue.length){const [c,d]=queue.shift()!;if(depths.has(c.hash))continue;depths.set(c.hash,d);const list=byDepth.get(d)||[];list.push(c);byDepth.set(d,list);for(const child of children.get(c.hash)||[])queue.push([child,d+1])}
 
    const NODE_W=172
-   const COL_GAP=28
-   const ROW_GAP=48
-   const MAX_COLS=6
+   const COL_GAP=24
+   const ROW_GAP=36
+   const MAX_COLS=7
    let y=52
-   let stageWidth=MAX_COLS*NODE_W+(MAX_COLS-1)*COL_GAP
+   const stageWidth=MAX_COLS*NODE_W+(MAX_COLS-1)*COL_GAP
+   const LEVEL_STEP=230+ROW_GAP
 
    for(let depth=0;depth<=Math.max(...byDepth.keys());depth++){
      const level=byDepth.get(depth)||[]
      if(!level.length)continue
-     // Keep nodes belonging to nearby parent branches adjacent.
+     // Keep nodes belonging to nearby parent branches adjacent, preserving the
+     // natural left-to-right flow without pushing the tree to the extremes.
      if(depth>0)level.sort((a,b)=>{
        const ax=out.get(a.parent||'')?.x||0, bx=out.get(b.parent||'')?.x||0
        return ax-bx || a.username.localeCompare(b.username)
@@ -52,9 +54,9 @@ function Canvas({casts,onSelect}:{casts:Cast[];onSelect:(c:Cast)=>void}){
        const slice=level.slice(row*MAX_COLS,(row+1)*MAX_COLS)
        const rowWidth=slice.length*NODE_W+(slice.length-1)*COL_GAP
        const start=(stageWidth-rowWidth)/2
-       slice.forEach((c,i)=>out.set(c.hash,{x:start+i*(NODE_W+COL_GAP),y:y+row*(230+ROW_GAP),depth}))
+       slice.forEach((c,i)=>out.set(c.hash,{x:start+i*(NODE_W+COL_GAP),y:y+row*LEVEL_STEP,depth}))
      }
-     y+=rows*(230+ROW_GAP)+72
+     y+=rows*LEVEL_STEP+58
    }
    return out
  },[casts,children,root])
