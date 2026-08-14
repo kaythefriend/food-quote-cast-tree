@@ -21,19 +21,44 @@ function Canvas({casts,onSelect}:{casts:Cast[];onSelect:(c:Cast)=>void}){
  const root=casts[0]
  const children=useMemo(()=>{const m=new Map<string,Cast[]>();for(const c of casts){if(c.parent){const a=m.get(c.parent)||[];a.push(c);m.set(c.parent,a)}}return m},[casts])
 
- // Compact tidy-tree layout: siblings stay close together, while subtrees are
- // allocated enough horizontal room to avoid overlap. This keeps the whole
- // conversation visible at the initial fit, like a map, rather than a row of cards.
+ // Compact, downward-growing layout. Each level is kept inside a centered
+ // band and wraps into a few rows when there are many quote-casts. This avoids
+ // the extreme left/right spread while preserving every parent-child edge.
  const positions=useMemo(()=>{
-   const out=new Map<string,Pos>();
-   const subtree=new Map<string,number>();
-   const GAP=34, NODE_W=172;
-   function measure(c:Cast):number{const kids=children.get(c.hash)||[];if(!kids.length){subtree.set(c.hash,NODE_W);return NODE_W}const total=kids.reduce((s,k)=>s+measure(k),0)+GAP*(kids.length-1);subtree.set(c.hash,Math.max(NODE_W,total));return subtree.get(c.hash)!}
-   let cursor=0;
-   function place(c:Cast,depth:number,left:number){const kids=children.get(c.hash)||[];const ownW=subtree.get(c.hash)||NODE_W;let x;if(!kids.length){x=cursor+NODE_W/2;cursor+=NODE_W+GAP}else{kids.forEach(k=>place(k,depth+1,left));const first=out.get(kids[0].hash)!,last=out.get(kids[kids.length-1].hash)!;x=(first.x+last.x)/2}out.set(c.hash,{x:x-NODE_W/2,y:depth*156,depth})}
-   if(root){measure(root);place(root,0,0)}
+   const out=new Map<string,Pos>()
+   if(!root)return out
+   const byDepth=new Map<number,Cast[]>()
+   const depths=new Map<string,number>()
+   const queue:[Cast,number][]=[[root,0]]
+   while(queue.length){const [c,d]=queue.shift()!;if(depths.has(c.hash))continue;depths.set(c.hash,d);const list=byDepth.get(d)||[];list.push(c);byDepth.set(d,list);for(const child of children.get(c.hash)||[])queue.push([child,d+1])}
+
+   const NODE_W=172
+   const COL_GAP=28
+   const ROW_GAP=48
+   const MAX_COLS=6
+   let y=52
+   let stageWidth=MAX_COLS*NODE_W+(MAX_COLS-1)*COL_GAP
+
+   for(let depth=0;depth<=Math.max(...byDepth.keys());depth++){
+     const level=byDepth.get(depth)||[]
+     if(!level.length)continue
+     // Keep nodes belonging to nearby parent branches adjacent.
+     if(depth>0)level.sort((a,b)=>{
+       const ax=out.get(a.parent||'')?.x||0, bx=out.get(b.parent||'')?.x||0
+       return ax-bx || a.username.localeCompare(b.username)
+     })
+     const rows=Math.ceil(level.length/MAX_COLS)
+     for(let row=0;row<rows;row++){
+       const slice=level.slice(row*MAX_COLS,(row+1)*MAX_COLS)
+       const rowWidth=slice.length*NODE_W+(slice.length-1)*COL_GAP
+       const start=(stageWidth-rowWidth)/2
+       slice.forEach((c,i)=>out.set(c.hash,{x:start+i*(NODE_W+COL_GAP),y:y+row*(230+ROW_GAP),depth}))
+     }
+     y+=rows*(230+ROW_GAP)+72
+   }
    return out
  },[casts,children,root])
+
  const minX=Math.min(...[...positions.values()].map(p=>p.x),0), maxX=Math.max(...[...positions.values()].map(p=>p.x+172),900)
  const minY=Math.min(...[...positions.values()].map(p=>p.y),0), maxY=Math.max(...[...positions.values()].map(p=>p.y+230),650)
  const w=Math.max(1100,maxX-minX+120),h=Math.max(650,maxY-minY+120)
