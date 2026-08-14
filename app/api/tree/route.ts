@@ -4,19 +4,21 @@ type Cast={hash:string;parent?:string|null;username:string;displayName?:string;a
 const ROOT='0x3db990553cbe9e8e8993504624b5c2aaf483aa73'
 const BASE='https://api.neynar.com/v2/farcaster'
 
-// Use media attached to this exact cast. Farcaster-hosted CDN URLs are valid
-// media too, so they must not be filtered out.
+// Use media attached to this exact cast. Prefer explicit image fields because
+// a generic embed `url` can be a webpage or another Farcaster cast.
 function validUrl(v:any){return typeof v==='string'&&/^https?:\/\//.test(v)?v:undefined}
+function likelyImage(u:string){return /\.(?:jpe?g|png|gif|webp|avif|svg)(?:[?#].*)?$/i.test(u)||/\/image(?:[/?]|$)/i.test(u)||/imagedelivery\.net\//i.test(u)||/images?\./i.test(u)}
 function imageOf(c:any){
   const direct=[c?.image_url,c?.image,c?.media?.image_url,c?.media?.url,c?.metadata?.image,c?.metadata?.image_url,c?.metadata?.ogImage]
-  for(const v of direct){const x=validUrl(v);if(x)return x}
+  for(const v of direct){const x=validUrl(v);if(x&&likelyImage(x))return x}
   const embeds=Array.isArray(c?.embeds)?c.embeds:[]
+  // Explicit image fields first.
   for(const e of embeds){
-    // Neynar can return a direct URL embed as well as an object embed.
-    const directEmbed=typeof e==='string'?e:undefined
-    const fields=typeof e==='object'&&e? [e.url,e.image_url,e.image,e?.metadata?.image,e?.metadata?.image_url,e?.metadata?.ogImage] : []
-    for(const v of [directEmbed,...fields]){const x=validUrl(v);if(x)return x}
+    const fields=typeof e==='object'&&e?[e.image_url,e.image,e?.metadata?.image,e?.metadata?.image_url,e?.metadata?.ogImage]:[]
+    for(const v of fields){const x=validUrl(v);if(x)return x}
   }
+  // Generic URL embeds are only accepted if they look like image resources.
+  for(const e of embeds){const v=typeof e==='string'?e:e?.url;const x=validUrl(v);if(x&&likelyImage(x))return x}
   for(const f of Array.isArray(c?.frames)?c.frames:[]){for(const v of [f?.image_url,f?.image]){const x=validUrl(v);if(x)return x}}
   return undefined
 }
