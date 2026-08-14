@@ -8,104 +8,20 @@ type Pos={x:number;y:number;depth:number}
 const DEFAULT_ROOT='0x3db990553cbe9e8e8993504624b5c2aaf483aa73'
 const MIN_ZOOM=.2
 const MAX_ZOOM=2.6
-
 function shortHash(h:string){return `${h.slice(0,6)}…${h.slice(-4)}`}
 function timeAgo(s?:string){if(!s)return '';const n=Date.now()-new Date(s).getTime();const m=Math.max(1,Math.round(n/60000));if(m<60)return `${m}m ago`;const h=Math.round(m/60);if(h<24)return `${h}h ago`;return `${Math.round(h/24)}d ago`}
-
 function Canvas({casts,onSelect}:{casts:Cast[];onSelect:(c:Cast)=>void}){
- const ref=useRef<HTMLDivElement>(null)
- const [zoom,setZoom]=useState(1)
- const [pan,setPan]=useState({x:0,y:0})
- const drag=useRef({x:0,y:0,px:0,py:0,active:false,moved:false})
- const initialized=useRef(false)
- const root=casts[0]
+ const ref=useRef<HTMLDivElement>(null);const [zoom,setZoom]=useState(1);const [pan,setPan]=useState({x:0,y:0});const drag=useRef({x:0,y:0,px:0,py:0,active:false,moved:false});const initialized=useRef(false);const root=casts[0]
  const children=useMemo(()=>{const m=new Map<string,Cast[]>();for(const c of casts){if(c.parent){const a=m.get(c.parent)||[];a.push(c);m.set(c.parent,a)}}return m},[casts])
-
- // Balanced downward-growing layout: slightly wider than the previous compact
- // version, while keeping the whole conversation visually centered. Seven
- // columns reduces excessive vertical stacking without creating a wide sprawl.
- const positions=useMemo(()=>{
-   const out=new Map<string,Pos>()
-   if(!root)return out
-   const byDepth=new Map<number,Cast[]>()
-   const depths=new Map<string,number>()
-   const queue:[Cast,number][]=[[root,0]]
-   while(queue.length){const [c,d]=queue.shift()!;if(depths.has(c.hash))continue;depths.set(c.hash,d);const list=byDepth.get(d)||[];list.push(c);byDepth.set(d,list);for(const child of children.get(c.hash)||[])queue.push([child,d+1])}
-
-   const NODE_W=172
-   const COL_GAP=24
-   const ROW_GAP=36
-   const MAX_COLS=7
-   let y=52
-   const stageWidth=MAX_COLS*NODE_W+(MAX_COLS-1)*COL_GAP
-   const LEVEL_STEP=230+ROW_GAP
-
-   for(let depth=0;depth<=Math.max(...byDepth.keys());depth++){
-     const level=byDepth.get(depth)||[]
-     if(!level.length)continue
-     // Keep nodes belonging to nearby parent branches adjacent, preserving the
-     // natural left-to-right flow without pushing the tree to the extremes.
-     if(depth>0)level.sort((a,b)=>{
-       const ax=out.get(a.parent||'')?.x||0, bx=out.get(b.parent||'')?.x||0
-       return ax-bx || a.username.localeCompare(b.username)
-     })
-     const rows=Math.ceil(level.length/MAX_COLS)
-     for(let row=0;row<rows;row++){
-       const slice=level.slice(row*MAX_COLS,(row+1)*MAX_COLS)
-       const rowWidth=slice.length*NODE_W+(slice.length-1)*COL_GAP
-       const start=(stageWidth-rowWidth)/2
-       slice.forEach((c,i)=>out.set(c.hash,{x:start+i*(NODE_W+COL_GAP),y:y+row*LEVEL_STEP,depth}))
-     }
-     y+=rows*LEVEL_STEP+58
-   }
-   return out
- },[casts,children,root])
-
- const minX=Math.min(...[...positions.values()].map(p=>p.x),0), maxX=Math.max(...[...positions.values()].map(p=>p.x+172),900)
- const minY=Math.min(...[...positions.values()].map(p=>p.y),0), maxY=Math.max(...[...positions.values()].map(p=>p.y+230),650)
- const w=Math.max(1100,maxX-minX+120),h=Math.max(650,maxY-minY+120)
-
- const fitTree=()=>{
-   if(!root||!ref.current)return
-   const vw=ref.current.clientWidth, vh=ref.current.clientHeight
-   const contentW=Math.max(1,maxX-minX+80), contentH=Math.max(1,maxY-minY+80)
-   const z=Math.min(1,Math.max(MIN_ZOOM,Math.min((vw-40)/contentW,(vh-40)/contentH)))
-   setZoom(z)
-   setPan({x:vw/2-((minX+maxX)/2)*z,y:vh/2-((minY+maxY)/2)*z})
- }
- useEffect(()=>{initialized.current=false;setZoom(1);setPan({x:0,y:0})},[rootHashKey(root)])
- useEffect(()=>{if(initialized.current||!root||!ref.current||positions.size===0)return;fitTree();initialized.current=true},[root,positions,maxX,maxY,minX,minY])
-
- function zoomAt(next:number,cx:number,cy:number){const old=zoom;const z=Math.min(MAX_ZOOM,Math.max(MIN_ZOOM,next));if(z===old)return;const rect=ref.current?.getBoundingClientRect();if(!rect){setZoom(z);return}const localX=cx-rect.left,localY=cy-rect.top;setPan(p=>({x:localX-(localX-p.x)*(z/old),y:localY-(localY-p.y)*(z/old)}));setZoom(z)}
- const onWheel=(e:React.WheelEvent)=>{e.preventDefault();zoomAt(zoom*Math.exp(-e.deltaY*.0015),e.clientX,e.clientY)}
- const down=(e:React.PointerEvent)=>{if((e.target as HTMLElement).closest('.castCard,.zoomControls,.detail'))return;drag.current={x:e.clientX,y:e.clientY,px:pan.x,py:pan.y,active:true,moved:false};e.currentTarget.setPointerCapture(e.pointerId)}
- const move=(e:React.PointerEvent)=>{if(!drag.current.active)return;const dx=e.clientX-drag.current.x,dy=e.clientY-drag.current.y;if(Math.abs(dx)+Math.abs(dy)>4)drag.current.moved=true;setPan({x:drag.current.px+dx,y:drag.current.py+dy})}
- const up=(e:React.PointerEvent)=>{drag.current.active=false;try{e.currentTarget.releasePointerCapture(e.pointerId)}catch{}}
- const reset=()=>fitTree()
- return <div ref={ref} className="treeViewport" onWheel={onWheel} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
-   <div className="treeStage" style={{width:w,height:h,left:0,top:0,transform:`translate3d(${pan.x}px,${pan.y}px,0) scale(${zoom})`}}>
-    <svg className="connections" width={w} height={h} aria-hidden="true">{casts.map(c=>{if(!c.parent)return null;const a=positions.get(c.parent),b=positions.get(c.hash);if(!a||!b)return null;const x1=a.x+86,y1=a.y+108,x2=b.x+86,y2=b.y+12,mid=(y1+y2)/2;return <path key={c.hash} d={`M ${x1} ${y1} C ${x1} ${mid}, ${x2} ${mid}, ${x2} ${y2}`} />})}</svg>
-    {casts.map(c=>{const p=positions.get(c.hash);if(!p)return null;const rootNode=!c.parent;return <button key={c.hash} className={`castCard ${rootNode?'rootCard':''}`} style={{left:p.x,top:p.y}} onPointerDown={e=>e.stopPropagation()} onClick={()=>onSelect(c)} aria-label={`Open cast by @${c.username}`}>
-      <div className="cardTop"><span className="depthBadge">{rootNode?'ORIGIN':`LEVEL ${p.depth}`}</span>{c.timestamp&&<span>{timeAgo(c.timestamp)}</span>}</div>
-      <div className="foodFrame">{c.image?<img src={c.image} alt="" loading={p.depth<2?'eager':'lazy'} onError={e=>{e.currentTarget.style.display='none';(e.currentTarget.parentElement?.querySelector('.noFood') as HTMLElement|null)?.classList.add('show')}}/>:<div className="noFood show"><span>🍽️</span><small>No food image</small></div>}<div className="avatarWrap">{c.avatar?<img src={c.avatar} alt="" loading="lazy"/>:<span>?</span>}</div></div>
-      <div className="cardBody"><strong>@{c.username}</strong><span className="displayName">{c.displayName||'Farcaster creator'}</span>{c.text&&<p>{c.text}</p>}<div className="cardFooter"><span>{shortHash(c.hash)}</span><span>↗</span></div></div>
-    </button>})}
-   </div>
-   <div className="zoomControls" aria-label="Tree zoom controls"><button aria-label="Zoom in" title="Zoom in" onClick={()=>{const r=ref.current?.getBoundingClientRect();zoomAt(zoom*1.2,(r?.left||0)+(r?.width||0)/2,(r?.top||0)+(r?.height||0)/2)}}>+</button><span>{Math.round(zoom*100)}%</span><button aria-label="Zoom out" title="Zoom out" onClick={()=>{const r=ref.current?.getBoundingClientRect();zoomAt(zoom/1.2,(r?.left||0)+(r?.width||0)/2,(r?.top||0)+(r?.height||0)/2)}}>−</button><button onClick={reset}>Fit all</button></div>
- </div>
-}
-
+ // Moderately wide, centered tree: more horizontal breathing room without the old extreme sprawl.
+ const positions=useMemo(()=>{const out=new Map<string,Pos>();if(!root)return out;const byDepth=new Map<number,Cast[]>();const depths=new Map<string,number>();const queue:[Cast,number][]=[[root,0]];while(queue.length){const [c,d]=queue.shift()!;if(depths.has(c.hash))continue;depths.set(c.hash,d);const list=byDepth.get(d)||[];list.push(c);byDepth.set(d,list);for(const child of children.get(c.hash)||[])queue.push([child,d+1])}
+   const NODE_W=172,COL_GAP=30,ROW_GAP=34,MAX_COLS=8;let y=52;const stageWidth=MAX_COLS*NODE_W+(MAX_COLS-1)*COL_GAP;const LEVEL_STEP=230+ROW_GAP
+   for(let depth=0;depth<=Math.max(...byDepth.keys());depth++){const level=byDepth.get(depth)||[];if(!level.length)continue;if(depth>0)level.sort((a,b)=>{const ax=out.get(a.parent||'')?.x||0,bx=out.get(b.parent||'')?.x||0;return ax-bx||a.username.localeCompare(b.username)});const rows=Math.ceil(level.length/MAX_COLS);for(let row=0;row<rows;row++){const slice=level.slice(row*MAX_COLS,(row+1)*MAX_COLS);const rowWidth=slice.length*NODE_W+(slice.length-1)*COL_GAP;const start=(stageWidth-rowWidth)/2;slice.forEach((c,i)=>out.set(c.hash,{x:start+i*(NODE_W+COL_GAP),y:y+row*LEVEL_STEP,depth}))}y+=rows*LEVEL_STEP+58}return out},[casts,children,root])
+ const minX=Math.min(...[...positions.values()].map(p=>p.x),0),maxX=Math.max(...[...positions.values()].map(p=>p.x+172),900),minY=Math.min(...[...positions.values()].map(p=>p.y),0),maxY=Math.max(...[...positions.values()].map(p=>p.y+230),650);const w=Math.max(1100,maxX-minX+120),h=Math.max(650,maxY-minY+120)
+ const fitTree=()=>{if(!root||!ref.current)return;const vw=ref.current.clientWidth,vh=ref.current.clientHeight,contentW=Math.max(1,maxX-minX+80),contentH=Math.max(1,maxY-minY+80),z=Math.min(1,Math.max(MIN_ZOOM,Math.min((vw-40)/contentW,(vh-40)/contentH)));setZoom(z);setPan({x:vw/2-((minX+maxX)/2)*z,y:vh/2-((minY+maxY)/2)*z})}
+ useEffect(()=>{initialized.current=false;setZoom(1);setPan({x:0,y:0})},[rootHashKey(root)]);useEffect(()=>{if(initialized.current||!root||!ref.current||positions.size===0)return;fitTree();initialized.current=true},[root,positions,maxX,maxY,minX,minY])
+ function zoomAt(next:number,cx:number,cy:number){const old=zoom,z=Math.min(MAX_ZOOM,Math.max(MIN_ZOOM,next));if(z===old)return;const rect=ref.current?.getBoundingClientRect();if(!rect){setZoom(z);return}const localX=cx-rect.left,localY=cy-rect.top;setPan(p=>({x:localX-(localX-p.x)*(z/old),y:localY-(localY-p.y)*(z/old)}));setZoom(z)}
+ const onWheel=(e:React.WheelEvent)=>{e.preventDefault();zoomAt(zoom*Math.exp(-e.deltaY*.0015),e.clientX,e.clientY)};const down=(e:React.PointerEvent)=>{if((e.target as HTMLElement).closest('.castCard,.zoomControls,.detail'))return;drag.current={x:e.clientX,y:e.clientY,px:pan.x,py:pan.y,active:true,moved:false};e.currentTarget.setPointerCapture(e.pointerId)};const move=(e:React.PointerEvent)=>{if(!drag.current.active)return;const dx=e.clientX-drag.current.x,dy=e.clientY-drag.current.y;if(Math.abs(dx)+Math.abs(dy)>4)drag.current.moved=true;setPan({x:drag.current.px+dx,y:drag.current.py+dy})};const up=(e:React.PointerEvent)=>{drag.current.active=false;try{e.currentTarget.releasePointerCapture(e.pointerId)}catch{}};const reset=()=>fitTree()
+ return <div ref={ref} className="treeViewport" onWheel={onWheel} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}><div className="treeStage" style={{width:w,height:h,left:0,top:0,transform:`translate3d(${pan.x}px,${pan.y}px,0) scale(${zoom})`}}><svg className="connections" width={w} height={h} aria-hidden="true">{casts.map(c=>{if(!c.parent)return null;const a=positions.get(c.parent),b=positions.get(c.hash);if(!a||!b)return null;const x1=a.x+86,y1=a.y+108,x2=b.x+86,y2=b.y+12,mid=(y1+y2)/2;return <path key={c.hash} d={`M ${x1} ${y1} C ${x1} ${mid}, ${x2} ${mid}, ${x2} ${y2}`} />})}</svg>{casts.map(c=>{const p=positions.get(c.hash);if(!p)return null;const rootNode=!c.parent;return <button key={c.hash} className={`castCard ${rootNode?'rootCard':''}`} style={{left:p.x,top:p.y}} onPointerDown={e=>e.stopPropagation()} onClick={()=>onSelect(c)} aria-label={`Open cast by @${c.username}`}><div className="cardTop"><span className="depthBadge">{rootNode?'ORIGIN':`LEVEL ${p.depth}`}</span>{c.timestamp&&<span>{timeAgo(c.timestamp)}</span>}</div><div className="foodFrame">{c.image?<img src={c.image} alt="" loading={p.depth<2?'eager':'lazy'} onError={e=>{e.currentTarget.style.display='none';(e.currentTarget.parentElement?.querySelector('.noFood') as HTMLElement|null)?.classList.add('show')}}/>:<div className="noFood show"><span>🍽️</span><small>No food image</small></div>}<div className="avatarWrap">{c.avatar?<img src={c.avatar} alt="" loading="lazy"/>:<span>?</span>}</div></div><div className="cardBody"><strong>@{c.username}</strong><span className="displayName">{c.displayName||'Farcaster creator'}</span>{c.text&&<p>{c.text}</p>}<div className="cardFooter"><span>{shortHash(c.hash)}</span><span>↗</span></div></div></button>})}</div><div className="zoomControls" aria-label="Tree zoom controls"><button aria-label="Zoom in" title="Zoom in" onClick={()=>{const r=ref.current?.getBoundingClientRect();zoomAt(zoom*1.2,(r?.left||0)+(r?.width||0)/2,(r?.top||0)+(r?.height||0)/2)}}>+</button><span>{Math.round(zoom*100)}%</span><button aria-label="Zoom out" title="Zoom out" onClick={()=>{const r=ref.current?.getBoundingClientRect();zoomAt(zoom/1.2,(r?.left||0)+(r?.width||0)/2,(r?.top||0)+(r?.height||0)/2)}}>−</button><button onClick={reset}>Fit all</button></div></div>}
 function rootHashKey(root?:Cast){return root?.hash||''}
-
-export default function Home(){
- const pathname=usePathname();const routeHash=pathname?.split('/').filter(Boolean)[0];const rootHash=routeHash||DEFAULT_ROOT
- const [casts,setCasts]=useState<Cast[]>([]),[selected,setSelected]=useState<Cast|null>(null),[loading,setLoading]=useState(true),[error,setError]=useState('')
- useEffect(()=>{let cancelled=false;setLoading(true);setError('');setSelected(null);fetch(`/api/tree?hash=${encodeURIComponent(rootHash)}`).then(async r=>{const d=await r.json();if(!r.ok||d.error)throw Error(d.error||`Request failed (${r.status})`);return d}).then(d=>{if(!cancelled)setCasts(d.casts||[])}).catch(e=>{if(!cancelled)setError(e.message||'Unable to load Farcaster data')}).finally(()=>{if(!cancelled)setLoading(false)});return()=>{cancelled=true}},[rootHash])
- const levels=casts.length?Math.max(...casts.map(c=>{let n=0,p=c.parent;const seen=new Set<string>();while(p&&!seen.has(p)){seen.add(p);const q=casts.find(x=>x.hash===p);if(!q)break;n++;p=q.parent}return n})):0
- return <main className="appShell"><header className="topbar"><div className="brandBlock"><div className="eyebrow">FARCASTER / FOOD CONVERSATION</div><h1>Food Quote Cast Tree</h1><p>Follow a food idea as it branches, mutates and travels across Farcaster.</p></div><div className="stats"><div><b>{casts.length||'—'}</b><span>casts</span></div><div><b>{levels||'—'}</b><span>levels</span></div></div></header>
- <section className="workspace"><div className="toolbar"><button onClick={()=>window.location.reload()}>↻ Refresh</button><button onClick={()=>window.open(`https://farcaster.xyz/${rootHash}`,'_blank')}>Open origin ↗</button></div>
- {loading?<div className="state"><div className="spinner"/><h2>Growing the tree…</h2><p>Fetching live quote-casts and their food media.</p></div>:error?<div className="state errorState"><div className="stateIcon">!</div><h2>Couldn’t grow the tree</h2><p>{error}</p><button onClick={()=>window.location.reload()}>Try again</button></div>:casts.length?<Canvas casts={casts} onSelect={setSelected}/>:<div className="state"><div className="stateIcon">🍴</div><h2>No quote-casts yet</h2><p>The origin loaded, but no quote descendants were returned.</p></div>}
- <div className="legend"><span><i className="dot origin"/> origin</span><span><i className="dot branch"/> quote-cast</span><span>drag to explore · scroll to zoom</span></div>
- {selected&&<aside className="detail"><button className="close" onClick={()=>setSelected(null)}>×</button><div className="detailLabel">CAST DETAIL</div>{selected.image?<img className="heroFood" src={selected.image} alt="Food from this cast"/>:<div className="heroFood noHero">🍽️<span>Food image unavailable</span></div>}<div className="profile"><div className="profilePic">{selected.avatar?<img src={selected.avatar} alt=""/>:'?'}</div><div><b>@{selected.username}</b><span>{selected.displayName}</span></div></div><p className="detailText">{selected.text||'No text was included with this cast.'}</p><div className="meta"><span>{selected.parent?'Quotes another cast':'Origin cast'}</span><code>{shortHash(selected.hash)}</code></div><a className="openCast" href={selected.castUrl||`https://farcaster.xyz/${selected.username}/${selected.hash}`} target="_blank">View on Farcaster <span>↗</span></a></aside>}
- </section></main>
-}
+export default function Home(){const pathname=usePathname(),routeHash=pathname?.split('/').filter(Boolean)[0],rootHash=routeHash||DEFAULT_ROOT;const [casts,setCasts]=useState<Cast[]>([]),[selected,setSelected]=useState<Cast|null>(null),[loading,setLoading]=useState(true),[error,setError]=useState('');useEffect(()=>{let cancelled=false;setLoading(true);setError('');setSelected(null);fetch(`/api/tree?hash=${encodeURIComponent(rootHash)}`).then(async r=>{const d=await r.json();if(!r.ok||d.error)throw Error(d.error||`Request failed (${r.status})`);return d}).then(d=>{if(!cancelled)setCasts(d.casts||[])}).catch(e=>{if(!cancelled)setError(e.message||'Unable to load Farcaster data')}).finally(()=>{if(!cancelled)setLoading(false)});return()=>{cancelled=true}},[rootHash]);const levels=casts.length?Math.max(...casts.map(c=>{let n=0,p=c.parent;const seen=new Set<string>();while(p&&!seen.has(p)){seen.add(p);const q=casts.find(x=>x.hash===p);if(!q)break;n++;p=q.parent}return n})):0;return <main className="appShell"><header className="topbar"><div className="brandBlock"><div className="eyebrow">FARCASTER / FOOD CONVERSATION</div><h1>Food Quote Cast Tree</h1><p>Follow a food idea as it branches, mutates and travels across Farcaster.</p></div><div className="stats"><div><b>{casts.length||'—'}</b><span>casts</span></div><div><b>{levels||'—'}</b><span>levels</span></div></div></header><section className="workspace"><div className="toolbar"><button onClick={()=>window.location.reload()}>↻ Refresh</button><button onClick={()=>window.open(`https://farcaster.xyz/${rootHash}`,'_blank')}>Open origin ↗</button></div>{loading?<div className="state"><div className="spinner"/><h2>Growing the tree…</h2><p>Fetching live quote-casts and their food media.</p></div>:error?<div className="state errorState"><div className="stateIcon">!</div><h2>Couldn’t grow the tree</h2><p>{error}</p><button onClick={()=>window.location.reload()}>Try again</button></div>:casts.length?<Canvas casts={casts} onSelect={setSelected}/>:<div className="state"><div className="stateIcon">🍴</div><h2>No quote-casts yet</h2><p>The origin loaded, but no quote descendants were returned.</p></div>}<div className="legend"><span><i className="dot origin"/> origin</span><span><i className="dot branch"/> quote-cast</span><span>drag to explore · scroll to zoom</span></div>{selected&&<aside className="detail"><button className="close" onClick={()=>setSelected(null)}>×</button><div className="detailLabel">CAST DETAIL</div>{selected.image?<img className="heroFood" src={selected.image} alt="Food from this cast"/>:<div className="heroFood noHero">🍽️<span>Food image unavailable</span></div>}<div className="profile"><div className="profilePic">{selected.avatar?<img src={selected.avatar} alt=""/>:'?'}</div><div><b>@{selected.username}</b><span>{selected.displayName}</span></div></div><p className="detailText">{selected.text||'No text was included with this cast.'}</p><div className="meta"><span>{selected.parent?'Quotes another cast':'Origin cast'}</span><code>{shortHash(selected.hash)}</code></div><a className="openCast" href={selected.castUrl||`https://farcaster.xyz/${selected.username}/${selected.hash}`} target="_blank">View on Farcaster <span>↗</span></a></aside>}</section></main>}
