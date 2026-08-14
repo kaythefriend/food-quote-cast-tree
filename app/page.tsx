@@ -6,8 +6,8 @@ import {usePathname} from 'next/navigation'
 type Cast={hash:string;parent?:string|null;username:string;displayName?:string;avatar?:string;image?:string;text?:string;timestamp?:string;castUrl?:string}
 type Pos={x:number;y:number;depth:number}
 const DEFAULT_ROOT='0x3db990553cbe9e8e8993504624b5c2aaf483aa73'
-const MIN_ZOOM=.45
-const MAX_ZOOM=2.4
+const MIN_ZOOM=.2
+const MAX_ZOOM=2.6
 
 function shortHash(h:string){return `${h.slice(0,6)}…${h.slice(-4)}`}
 function timeAgo(s?:string){if(!s)return '';const n=Date.now()-new Date(s).getTime();const m=Math.max(1,Math.round(n/60000));if(m<60)return `${m}m ago`;const h=Math.round(m/60);if(h<24)return `${h}h ago`;return `${Math.round(h/24)}d ago`}
@@ -16,23 +16,45 @@ function Canvas({casts,onSelect}:{casts:Cast[];onSelect:(c:Cast)=>void}){
  const ref=useRef<HTMLDivElement>(null)
  const [zoom,setZoom]=useState(1)
  const [pan,setPan]=useState({x:0,y:0})
- const drag=useRef({x:0,y:0,px:0,py:0,active:false})
+ const drag=useRef({x:0,y:0,px:0,py:0,active:false,moved:false})
  const initialized=useRef(false)
  const root=casts[0]
  const children=useMemo(()=>{const m=new Map<string,Cast[]>();for(const c of casts){if(c.parent){const a=m.get(c.parent)||[];a.push(c);m.set(c.parent,a)}}return m},[casts])
- const positions=useMemo(()=>{const out=new Map<string,Pos>();let cursor=0;function walk(c:Cast,depth:number){const kids=children.get(c.hash)||[];kids.forEach(k=>walk(k,depth+1));const own=kids.length?kids.reduce((sum,k)=>sum+(out.get(k.hash)?.x||0),0)/kids.length:cursor++*190;out.set(c.hash,{x:own,y:depth*190,depth})}if(root)walk(root,0);const max=Math.max(...[...out.values()].map(p=>p.x),900);for(const p of out.values())p.x+=Math.max(40,(max-900)/2);return out},[casts,children,root])
- const w=Math.max(1100,...[...positions.values()].map(p=>p.x+220)),h=Math.max(650,...[...positions.values()].map(p=>p.y+230))
 
- const centerTree=()=>{if(!root||!ref.current)return;const r=positions.get(root.hash);if(!r)return;const vw=ref.current.clientWidth;const vh=ref.current.clientHeight;setPan({x:vw/2-(r.x+86),y:Math.max(72,vh*.08)-r.y})}
+ // Compact tidy-tree layout: siblings stay close together, while subtrees are
+ // allocated enough horizontal room to avoid overlap. This keeps the whole
+ // conversation visible at the initial fit, like a map, rather than a row of cards.
+ const positions=useMemo(()=>{
+   const out=new Map<string,Pos>();
+   const subtree=new Map<string,number>();
+   const GAP=34, NODE_W=172;
+   function measure(c:Cast):number{const kids=children.get(c.hash)||[];if(!kids.length){subtree.set(c.hash,NODE_W);return NODE_W}const total=kids.reduce((s,k)=>s+measure(k),0)+GAP*(kids.length-1);subtree.set(c.hash,Math.max(NODE_W,total));return subtree.get(c.hash)!}
+   let cursor=0;
+   function place(c:Cast,depth:number,left:number){const kids=children.get(c.hash)||[];const ownW=subtree.get(c.hash)||NODE_W;let x;if(!kids.length){x=cursor+NODE_W/2;cursor+=NODE_W+GAP}else{kids.forEach(k=>place(k,depth+1,left));const first=out.get(kids[0].hash)!,last=out.get(kids[kids.length-1].hash)!;x=(first.x+last.x)/2}out.set(c.hash,{x:x-NODE_W/2,y:depth*156,depth})}
+   if(root){measure(root);place(root,0,0)}
+   return out
+ },[casts,children,root])
+ const minX=Math.min(...[...positions.values()].map(p=>p.x),0), maxX=Math.max(...[...positions.values()].map(p=>p.x+172),900)
+ const minY=Math.min(...[...positions.values()].map(p=>p.y),0), maxY=Math.max(...[...positions.values()].map(p=>p.y+230),650)
+ const w=Math.max(1100,maxX-minX+120),h=Math.max(650,maxY-minY+120)
+
+ const fitTree=()=>{
+   if(!root||!ref.current)return
+   const vw=ref.current.clientWidth, vh=ref.current.clientHeight
+   const contentW=Math.max(1,maxX-minX+80), contentH=Math.max(1,maxY-minY+80)
+   const z=Math.min(1,Math.max(MIN_ZOOM,Math.min((vw-40)/contentW,(vh-40)/contentH)))
+   setZoom(z)
+   setPan({x:vw/2-((minX+maxX)/2)*z,y:vh/2-((minY+maxY)/2)*z})
+ }
  useEffect(()=>{initialized.current=false;setZoom(1);setPan({x:0,y:0})},[rootHashKey(root)])
- useEffect(()=>{if(initialized.current||!root||!ref.current)return;const r=positions.get(root.hash);if(!r)return;const vw=ref.current.clientWidth;const vh=ref.current.clientHeight;setPan({x:vw/2-(r.x+86),y:Math.max(72,vh*.08)-r.y});initialized.current=true},[root,positions])
+ useEffect(()=>{if(initialized.current||!root||!ref.current||positions.size===0)return;fitTree();initialized.current=true},[root,positions,maxX,maxY,minX,minY])
 
  function zoomAt(next:number,cx:number,cy:number){const old=zoom;const z=Math.min(MAX_ZOOM,Math.max(MIN_ZOOM,next));if(z===old)return;const rect=ref.current?.getBoundingClientRect();if(!rect){setZoom(z);return}const localX=cx-rect.left,localY=cy-rect.top;setPan(p=>({x:localX-(localX-p.x)*(z/old),y:localY-(localY-p.y)*(z/old)}));setZoom(z)}
- const onWheel=(e:React.WheelEvent)=>{e.preventDefault();const factor=Math.exp(-e.deltaY*.0015);zoomAt(zoom*factor,e.clientX,e.clientY)}
- const down=(e:React.PointerEvent)=>{if((e.target as HTMLElement).closest('.castCard,.zoomControls'))return;drag.current={x:e.clientX,y:e.clientY,px:pan.x,py:pan.y,active:true};e.currentTarget.setPointerCapture(e.pointerId)}
- const move=(e:React.PointerEvent)=>{if(!drag.current.active)return;setPan({x:drag.current.px+e.clientX-drag.current.x,y:drag.current.py+e.clientY-drag.current.y})}
- const up=()=>{drag.current.active=false}
- const reset=()=>{setZoom(1);centerTree()}
+ const onWheel=(e:React.WheelEvent)=>{e.preventDefault();zoomAt(zoom*Math.exp(-e.deltaY*.0015),e.clientX,e.clientY)}
+ const down=(e:React.PointerEvent)=>{if((e.target as HTMLElement).closest('.castCard,.zoomControls,.detail'))return;drag.current={x:e.clientX,y:e.clientY,px:pan.x,py:pan.y,active:true,moved:false};e.currentTarget.setPointerCapture(e.pointerId)}
+ const move=(e:React.PointerEvent)=>{if(!drag.current.active)return;const dx=e.clientX-drag.current.x,dy=e.clientY-drag.current.y;if(Math.abs(dx)+Math.abs(dy)>4)drag.current.moved=true;setPan({x:drag.current.px+dx,y:drag.current.py+dy})}
+ const up=(e:React.PointerEvent)=>{drag.current.active=false;try{e.currentTarget.releasePointerCapture(e.pointerId)}catch{}}
+ const reset=()=>fitTree()
  return <div ref={ref} className="treeViewport" onWheel={onWheel} onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up}>
    <div className="treeStage" style={{width:w,height:h,left:0,top:0,transform:`translate3d(${pan.x}px,${pan.y}px,0) scale(${zoom})`}}>
     <svg className="connections" width={w} height={h} aria-hidden="true">{casts.map(c=>{if(!c.parent)return null;const a=positions.get(c.parent),b=positions.get(c.hash);if(!a||!b)return null;const x1=a.x+86,y1=a.y+108,x2=b.x+86,y2=b.y+12,mid=(y1+y2)/2;return <path key={c.hash} d={`M ${x1} ${y1} C ${x1} ${mid}, ${x2} ${mid}, ${x2} ${y2}`} />})}</svg>
@@ -42,7 +64,7 @@ function Canvas({casts,onSelect}:{casts:Cast[];onSelect:(c:Cast)=>void}){
       <div className="cardBody"><strong>@{c.username}</strong><span className="displayName">{c.displayName||'Farcaster creator'}</span>{c.text&&<p>{c.text}</p>}<div className="cardFooter"><span>{shortHash(c.hash)}</span><span>↗</span></div></div>
     </button>})}
    </div>
-   <div className="zoomControls" aria-label="Tree zoom controls"><button aria-label="Zoom in" title="Zoom in" onClick={()=>{const r=ref.current?.getBoundingClientRect();zoomAt(zoom*1.2,(r?.left||0)+(r?.width||0)/2,(r?.top||0)+(r?.height||0)/2)}}>+</button><span>{Math.round(zoom*100)}%</span><button aria-label="Zoom out" title="Zoom out" onClick={()=>{const r=ref.current?.getBoundingClientRect();zoomAt(zoom/1.2,(r?.left||0)+(r?.width||0)/2,(r?.top||0)+(r?.height||0)/2)}}>−</button><button onClick={reset}>Reset</button></div>
+   <div className="zoomControls" aria-label="Tree zoom controls"><button aria-label="Zoom in" title="Zoom in" onClick={()=>{const r=ref.current?.getBoundingClientRect();zoomAt(zoom*1.2,(r?.left||0)+(r?.width||0)/2,(r?.top||0)+(r?.height||0)/2)}}>+</button><span>{Math.round(zoom*100)}%</span><button aria-label="Zoom out" title="Zoom out" onClick={()=>{const r=ref.current?.getBoundingClientRect();zoomAt(zoom/1.2,(r?.left||0)+(r?.width||0)/2,(r?.top||0)+(r?.height||0)/2)}}>−</button><button onClick={reset}>Fit all</button></div>
  </div>
 }
 
