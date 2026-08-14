@@ -3,7 +3,25 @@ import {NextRequest,NextResponse} from 'next/server'
 type Cast={hash:string;parent?:string|null;username:string;displayName?:string;avatar?:string;image?:string;text?:string;timestamp?:string;castUrl?:string}
 const ROOT='0x3db990553cbe9e8e8993504624b5c2aaf483aa73'
 const BASE='https://api.neynar.com/v2/farcaster'
-function imageOf(c:any){for(const e of c?.embeds||[]){const u=e?.url||e?.metadata?.image||e?.image_url||e?.cast?.embeds?.[0]?.url;if(typeof u==='string'&&/^https?:\/\//.test(u)&&!u.includes('farcaster.xyz'))return u}const u=c?.frames?.[0]?.image;return typeof u==='string'?u:undefined}
+
+function imageOf(c:any){
+  const urls:string[]=[]
+  const add=(v:any)=>{if(typeof v==='string'&&/^https?:\/\//.test(v)&&!v.includes('farcaster.xyz')&&!urls.includes(v))urls.push(v)}
+  const walk=(e:any)=>{
+    if(!e||typeof e!=='object')return
+    add(e.url);add(e.image_url);add(e.image);add(e.thumbnail_url)
+    add(e?.metadata?.image);add(e?.metadata?.image_url);add(e?.metadata?.thumbnail_url)
+    if(Array.isArray(e?.metadata?.images))e.metadata.images.forEach(add)
+    if(Array.isArray(e?.images))e.images.forEach(add)
+    if(e?.cast)walk(e.cast)
+    if(Array.isArray(e?.embeds))e.embeds.forEach(walk)
+  }
+  if(Array.isArray(c?.embeds))c.embeds.forEach(walk)
+  if(Array.isArray(c?.frames))c.frames.forEach((f:any)=>{add(f?.image);add(f?.image_url);walk(f)})
+  add(c?.image_url);add(c?.image)
+  return urls[0]
+}
+
 function normalize(c:any,parentOverride?:string):Cast{const username=c?.author?.username||c?.author?.display_name||'unknown';return {hash:c.hash,parent:parentOverride??c.parent_hash??c.parent?.hash??null,username,displayName:c?.author?.display_name,avatar:c?.author?.pfp_url,image:imageOf(c),text:c?.text,timestamp:c?.timestamp,castUrl:`https://farcaster.xyz/${username}/${c.hash}`}}
 async function api(path:string){const key=process.env.NEYNAR_API_KEY;if(!key)throw Error('NEYNAR_API_KEY is not configured in Vercel.');const r=await fetch(BASE+path,{headers:{accept:'application/json','x-api-key':key},next:{revalidate:60}});if(!r.ok)throw Error(`Farcaster API returned ${r.status}`);return r.json()}
 async function quotesOf(hash:string){const all:any[]=[];let cursor='';for(let page=0;page<10;page++){const q=`/cast/quotes?identifier=${encodeURIComponent(hash)}&type=hash&limit=100${cursor?`&cursor=${encodeURIComponent(cursor)}`:''}`;const d=await api(q);all.push(...(d.casts||[]));cursor=d?.next?.cursor||'';if(!cursor)break}return all}
